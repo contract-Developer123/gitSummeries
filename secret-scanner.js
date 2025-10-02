@@ -1,11 +1,9 @@
-const { exec, execSync } = require('child_process');
+const { exec } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const axios = require('axios');
 const core = require('@actions/core');
 
-// ✅ Custom Gitleaks rules
 const customRules = `
 [[rules]]
 id = "strict-secret-detection"
@@ -20,16 +18,10 @@ regex = '''eyJ[A-Za-z0-9-_]+\\.eyJ[A-Za-z0-9-_]+\\.[A-Za-z0-9-_]+'''
 tags = ["token", "jwt"]
 `;
 
-// ✅ Utility Functions
 function writeCustomRules(rules) {
   const filePath = path.join(os.tmpdir(), 'gitleaks-custom-rules.toml');
   fs.writeFileSync(filePath, rules, 'utf8');
   return filePath;
-}
-
-function shouldSkip(filePath) {
-  const skipList = ['node_modules', '.git', 'package.json', 'README.md'];
-  return skipList.some(skip => filePath.includes(skip));
 }
 
 async function checkGitleaksInstalled() {
@@ -50,6 +42,7 @@ async function runGitleaks(scanDir, reportPath, rulesPath, gitleaksPath) {
   return new Promise((resolve, reject) => {
     exec(cmd, { shell: true, maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
       if (stderr) console.warn('⚠️ Gitleaks STDERR:\n', stderr);
+      // gitleaks returns exit code 1 if leaks found - treat as success here
       if (err && err.code !== 1) {
         reject(new Error(`❌ Gitleaks failed: ${err.message}`));
         return;
@@ -69,67 +62,25 @@ async function readReport(reportPath) {
   }
 }
 
-function filterSecrets(results) {
-  return results.filter(item => {
-    if (!item.File || shouldSkip(item.File)) return false;
-    if (/["']?\$\{?[A-Z0-9_]+\}?["']?/.test(item.Match)) return false;
-    return true;
-  });
-}
-
-function mapToApiFormat(item) {
-  return {
-    RuleID: item.RuleID,
-    Description: item.Description,
-    File: item.File,
-    Match: item.Match,
-    Secret: item.Secret,
-    StartLine: String(item.StartLine ?? ''),
-    EndLine: String(item.EndLine ?? ''),
-    StartColumn: String(item.StartColumn ?? ''),
-    EndColumn: String(item.EndColumn ?? '')
-  };
-}
-
-async function sendToApi(secrets) {
-  const projectId = process.env.PROJECT_ID;
-  if (!projectId) {
-    console.warn('⚠️ PROJECT_ID not set. Skipping API upload.');
-    return;
-  }
-
-  const apiUrl = `https://dev.neoTrak.io/open-pulse/project/update-secrets/${projectId}`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-api-key': process.env.X_API_KEY || '',
-    'x-secret-key': process.env.X_SECRET_KEY || '',
-    'x-tenant-key': process.env.X_TENANT_KEY || ''
-  };
-
-  const payload = secrets.map(mapToApiFormat);
-
-  try {
-    const res = await axios.post(apiUrl, payload, { headers });
-    if (res.status >= 200 && res.status < 300) {
-      console.log('✅ Secrets sent to API successfully.');
-    } else {
-      console.error(`❌ API error (${res.status}):`, res.data);
-    }
-  } catch (err) {
-    console.error('❌ Failed to send secrets to API:', err.message);
-  }
-}
-
 async function writeGitHubSummary(secrets) {
   if (!core) return;
 
-  if (!secrets.length) {
+  if (secrets.length === 0) {
     await core.summary
       .addHeading('🔐 Secret Scan Results')
       .addRaw('✅ No secrets found.\n')
       .write();
+    core.setOutput('scan_result', 'passed');
     return;
   }
+
+  // Build the table rows
+  const tableRows = secrets.map(item => [
+    item.File.replace(/^.*\/sbom\//, 'sbom/'),
+    item.Description,
+    item.StartLine || '',
+    item.Match.length > 40 ? item.Match.slice(0, 40) + '...' : item.Match
+  ]);
 
   await core.summary
     .addHeading('🔐 Secret Scan Results')
@@ -140,18 +91,15 @@ async function writeGitHubSummary(secrets) {
         { data: '📌 Line', header: true },
         { data: '🧬 Match', header: true }
       ],
-      ...secrets.map(item => [
-        item.File.replace(/^.*\/sbom\//, 'sbom/'),
-        item.Description,
-        item.StartLine,
-        item.Match.length > 40 ? item.Match.slice(0, 40) + '...' : item.Match
-      ])
+      ...tableRows
     ])
     .addLink('🔗 View Dashboard', 'https://dev.neoTrak.io')
     .write();
+
+  core.setFailed(`❌ Secrets found: ${secrets.length}`);
+  core.setOutput('scan_result', 'failed');
 }
 
-// ✅ Main Scanner
 async function main() {
   try {
     console.log('🚀 Starting secret scan...');
@@ -161,22 +109,17 @@ async function main() {
     const gitleaksPath = await checkGitleaksInstalled();
 
     await runGitleaks(scanDir, reportPath, rulesPath, gitleaksPath);
+
     const results = await readReport(reportPath);
-    if (!results.length) {
-      console.log('✅ No secrets detected.');
-      await writeGitHubSummary([]);
-      return;
-    }
 
-    const filtered = filterSecrets(results);
-    console.log(`🔐 Secrets detected: ${filtered.length}`);
-    filtered.forEach(s => console.log('📄 Secret:', mapToApiFormat(s)));
+    console.log(`🔐 Secrets detected: ${results.length}`);
 
-    await sendToApi(filtered);
-    await writeGitHubSummary(filtered);
+    // No filtering — show all found leaks
+    await writeGitHubSummary(results);
 
   } catch (err) {
     console.error('❌ Secret scan failed:', err.message);
+    core.setFailed(`Secret scan failed: ${err.message}`);
     process.exit(1);
   }
 }
