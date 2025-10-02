@@ -65,42 +65,40 @@ async function readReport(reportPath) {
 async function writeGitHubSummary(secrets, durationStr = '') {
   if (!core) return;
 
-  await core.summary.addHeading('🔐 Secret Scan Results');
-  if (durationStr) {
-    await core.summary.addRaw(`⏰ Scan duration: ${durationStr}\n`);
-  }
+  await core.summary.addHeading('Test Results');
 
-  if (secrets.length === 0) {
-    await core.summary
-      .addRaw('✅ No secrets found.\n')
-      .write();
-    core.setOutput('scan_result', 'passed');
-    return;
-  }
+  // Group secrets by file
+  const fileStatus = {};
+  secrets.forEach(item => {
+    const file = item.File.replace(/^.*\/sbom\//, 'sbom/');
+    fileStatus[file] = 'Fail ❌';
+  });
 
-  // Build the table rows
-  const tableRows = secrets.map(item => [
-    item.File.replace(/^.*\/sbom\//, 'sbom/'),
-    item.Description,
-    item.StartLine || '',
-    item.Match.length > 40 ? item.Match.slice(0, 40) + '...' : item.Match
+  // If you want to show "Pass ✅" for files with no secrets, you need a list of all scanned files.
+  // For now, only files with secrets will be shown.
+  const tableRows = Object.entries(fileStatus).map(([file, status]) => [
+    file,
+    status
   ]);
 
   await core.summary
     .addTable([
       [
-        { data: '📄 File', header: true },
-        { data: '🔍 Type', header: true },
-        { data: '📌 Line', header: true },
-        { data: '🧬 Match', header: true }
+        { data: 'File', header: true },
+        { data: 'Result', header: true }
       ],
       ...tableRows
     ])
+    .addRaw(`⏰ Scan duration: ${durationStr}\n`)
     .addLink('🔗 View Dashboard', 'https://dev.neoTrak.io')
     .write();
 
-  core.setFailed(`❌ Secrets found: ${secrets.length}`);
-  core.setOutput('scan_result', 'failed');
+  if (secrets.length === 0) {
+    core.setOutput('scan_result', 'passed');
+  } else {
+    core.setFailed(`❌ Secrets found: ${secrets.length}`);
+    core.setOutput('scan_result', 'failed');
+  }
 }
 
 async function main() {
