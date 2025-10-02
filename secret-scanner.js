@@ -67,18 +67,16 @@ async function writeGitHubSummary(secrets, durationStr = '') {
 
   await core.summary.addHeading('Test Results');
 
-  // Group secrets by file
-  const fileStatus = {};
-  secrets.forEach(item => {
-    const file = item.File.replace(/^.*\/sbom\//, 'sbom/');
-    fileStatus[file] = 'Fail ❌';
-  });
+  // Get all scanned files (top-level only; for recursive, use a helper)
+  const scanDir = process.env.SCAN_DIR || process.cwd();
+  const scannedFiles = fs.readdirSync(scanDir)
+    .filter(f => fs.statSync(path.join(scanDir, f)).isFile());
 
-  // If you want to show "Pass ✅" for files with no secrets, you need a list of all scanned files.
-  // For now, only files with secrets will be shown.
-  const tableRows = Object.entries(fileStatus).map(([file, status]) => [
+  // Mark files with secrets as Fail, others as Pass
+  const secretFiles = new Set(secrets.map(item => path.basename(item.File)));
+  const tableRows = scannedFiles.map(file => [
     file,
-    status
+    secretFiles.has(file) ? 'Fail ❌' : 'Pass ✅'
   ]);
 
   await core.summary
