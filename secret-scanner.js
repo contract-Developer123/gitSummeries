@@ -62,12 +62,16 @@ async function readReport(reportPath) {
   }
 }
 
-async function writeGitHubSummary(secrets) {
+async function writeGitHubSummary(secrets, durationStr = '') {
   if (!core) return;
+
+  await core.summary.addHeading('🔐 Secret Scan Results');
+  if (durationStr) {
+    await core.summary.addRaw(`⏰ Scan duration: ${durationStr}\n`);
+  }
 
   if (secrets.length === 0) {
     await core.summary
-      .addHeading('🔐 Secret Scan Results')
       .addRaw('✅ No secrets found.\n')
       .write();
     core.setOutput('scan_result', 'passed');
@@ -83,7 +87,6 @@ async function writeGitHubSummary(secrets) {
   ]);
 
   await core.summary
-    .addHeading('🔐 Secret Scan Results')
     .addTable([
       [
         { data: '📄 File', header: true },
@@ -108,14 +111,22 @@ async function main() {
     const rulesPath = writeCustomRules(customRules);
     const gitleaksPath = await checkGitleaksInstalled();
 
+    const startTime = Date.now();
     await runGitleaks(scanDir, reportPath, rulesPath, gitleaksPath);
+    const endTime = Date.now();
 
     const results = await readReport(reportPath);
 
-    console.log(`🔐 Secrets detected: ${results.length}`);
+    const durationMs = endTime - startTime;
+    const durationMin = Math.floor(durationMs / 60000);
+    const durationSec = Math.floor((durationMs % 60000) / 1000);
+    const durationStr = `${durationMin}min ${durationSec}s`;
 
-    // No filtering — show all found leaks
-    await writeGitHubSummary(results);
+    console.log(`🔐 Secrets detected: ${results.length}`);
+    console.log(`⏰ Scan duration: ${durationStr}`);
+
+    // Pass duration to summary
+    await writeGitHubSummary(results, durationStr);
 
   } catch (err) {
     console.error('❌ Secret scan failed:', err.message);
