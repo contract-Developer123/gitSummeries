@@ -65,6 +65,9 @@ async function readReport(reportPath) {
 async function writeGitHubSummary(secrets, durationStr = '') {
   if (!core) return;
 
+  // Debug: Show summary file path
+  console.log('Summary file:', process.env.GITHUB_STEP_SUMMARY);
+
   await core.summary.addHeading('Test Results');
 
   // Get all scanned files (top-level only; for recursive, use a helper)
